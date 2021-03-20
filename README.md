@@ -1,7 +1,7 @@
 rant
 ====
 
-![CI](https://github.com/kusabashira/cdp/workflows/CI/badge.svg)
+![CI](https://github.com/kusabashira/rant/workflows/CI/badge.svg)
 
 Generate a random text from the expression.
 

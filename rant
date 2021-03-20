@@ -1,0 +1,333 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use utf8;
+use Encode qw(encode_utf8 decode_utf8);
+use Getopt::Long qw(:config posix_default no_ignore_case gnu_compat bundling);
+
+use open IO => ":encoding(UTF-8)";
+binmode STDIN, ":encoding(UTF-8)";
+binmode STDOUT, ":encoding(UTF-8)";
+binmode STDERR, ":encoding(UTF-8)";
+
+my $cmd_name  = $0 =~ s/^.*\///r;
+my $cmd_usage = <<EOL;
+usage: $cmd_name [<option(s)>] <expression-only-if-no-other-expression>
+generate a random text from the expression
+
+options:
+  -c, --count=N           generate random text N times
+  -e, --expression=EXPR   generate random text from EXPR
+  -s, --separator=SEP     print SEP between the generated text
+      --help              print usage and exit
+
+expression-syntax:
+  \\d    digit character
+  \\w    alphanumeric character + "_"
+  \\t    tab character
+  \\n    newline character
+ \ [...] character list ([abc], [a-z] and [a-zA-Z] are supported)
+  \\x    escape x
+ \ {n,m} repeat n to m times (m is optional)
+ \ ?     same as {0,1}
+ \ (a|b) a or b
+EOL
+
+package Main {
+    sub main {
+        local $SIG{__WARN__} = \&print_error_and_abort;
+
+        Getopt::Long::GetOptions(\my %options, qw/
+            count|c=i
+            expression|e=s
+            separator|s=s
+            help
+        /);
+        if (defined($options{help})) {
+            print $cmd_usage;
+            exit 0;
+        }
+        if (!defined($options{expression}) && @ARGV >= 1) {
+            $options{expression} = $ARGV[0];
+            shift;
+        }
+        my $count      = $options{count}                           // 1;
+        my $expression = Encode::decode_utf8($options{expression}) // q/\w{8}/;
+        my $separator  = Encode::decode_utf8($options{separator})  // "\n";
+
+        my $generator = Generator->new($expression);
+        for (my $i = 0; $i < $count; $i++) {
+            print $separator if $i != 0;
+            print $generator->next;
+        }
+        print "\n";
+    }
+
+    sub print_error_and_abort {
+        my ($error) = @_;
+        chomp $error;
+        print STDERR "$cmd_name: $error\n";
+        exit 1;
+    }
+}
+
+package Generator {
+    use constant {
+        TOKEN_WORD        => 1,
+        TOKEN_DIGIT       => 2,
+        TOKEN_CHAR        => 3,
+        TOKEN_LIST        => 4,
+        TOKEN_REPEAT      => 5,
+        TOKEN_HATENA      => 6,
+        TOKEN_GROUP_START => 7,
+        TOKEN_GROUP_SEP   => 8,
+        TOKEN_GROUP_END   => 9,
+    };
+
+    use constant {
+        ELEMENT_FIXED    => 1,
+        ELEMENT_VARIABLE => 2,
+        ELEMENT_GROUP    => 3,
+    };
+
+    my $nonblank_characters = [map { chr($_) } (ord("!")..ord("~"))];
+    my $digit_characters    = ["0".."9"];
+    my $word_characters     = ["a".."z", "A".."Z", "0".."9", "_"];
+
+    sub new {
+        my ($class, $expression) = @_;
+        my $self = {rule => build_rule_from_expression($expression)};
+        bless $self, $class;
+        return $self;
+    }
+
+    sub build_rule_from_expression {
+        my ($expression) = @_;
+
+        my $tokens = lex_expression($expression);
+        my $rule   = parse_expression($tokens);
+        my $rule2  = optimize_expression($rule);
+        return $rule2;
+    }
+
+    sub lex_expression {
+        my ($expression) = @_;
+        my $tokens = [];
+        for ($expression) {
+            if (/\G\\(.)/gcms) {
+                if ($1 eq "w") {
+                    push @$tokens, {type => TOKEN_WORD};
+                    redo;
+                } elsif ($1 eq "d") {
+                    push @$tokens, {type => TOKEN_DIGIT};
+                    redo;
+                } elsif ($1 eq "t") {
+                    push @$tokens, {type => TOKEN_CHAR, char => "\t"};
+                    redo;
+                } elsif ($1 eq "n") {
+                    push @$tokens, {type => TOKEN_CHAR, char => "\n"};
+                    redo;
+                } else {
+                    push @$tokens, {type => TOKEN_CHAR, char => $1};
+                    redo;
+                }
+            } elsif (/\G\[((?:[^\[\]\-]|\\[\[\]\-]|(?:[^\[\]\-]|\\[\[\]\-])-(?:[^\[\]\-]|\\[\[\]\-]))+)\]/gcms) {
+                my $list_expression = $1;
+                my $list = [];
+                for ($list_expression) {
+                    if (/\G([^\[\]\-]|\\[^\[\]\-])-([^\[\]\-]|\\[^\[\]\-])/gcms) {
+                        push @$list, map { chr($_) } (ord($1) .. ord($2));
+                        redo;
+                    } elsif (/\G([\[\[\]\-])/gcms) {
+                        push @$list, $1;
+                        redo;
+                    } elsif (/\G([^\[\]\-])/gcms) {
+                        push @$list, $1;
+                        redo;
+                    } elsif (/\G\Z/gcms) {
+                        last;
+                    } else {
+                        die "invalid expression accpted";
+                    }
+                }
+                if (@$list == 0) {
+                    die "invalid expression accpted";
+                }
+                push @$tokens, {type => TOKEN_LIST, list => $list};
+                redo;
+            } elsif (/\G\{(\d+)(?:,(\d+))?\}/gcms) {
+                push @$tokens, {type => TOKEN_REPEAT, n => $1, m => $2 // undef};
+                redo;
+            } elsif (/\G\?/gcms) {
+                push @$tokens, {type => TOKEN_HATENA, n => $1, m => $2 // undef};
+                redo;
+            } elsif (/\G\(/gcms) {
+                push @$tokens, {type => TOKEN_GROUP_START};
+                redo;
+            } elsif (/\G\|/gcms) {
+                push @$tokens, {type => TOKEN_GROUP_SEP};
+                redo;
+            } elsif (/\G\)/gcms) {
+                push @$tokens, {type => TOKEN_GROUP_END};
+                redo;
+            } elsif (/\G[\\\[\]\{\}]/gcms) {
+                die "invalid expression accpted";
+                redo;
+            } elsif (/\G(.)/gcms) {
+                push @$tokens, {type => TOKEN_CHAR, char => $1};
+                redo;
+            } elsif (/\G\Z/gcms) {
+                last;
+            } else {
+                die "invalid expression accpted";
+            }
+        }
+        return $tokens;
+    }
+
+    sub parse_expression {
+        my ($tokens, $nested, $token_start_i) = @_;
+        my $branches = [];
+        my $items    = [];
+        for (my $token_i = $token_start_i // 0; $token_i < @$tokens; $token_i++) {
+            my $token = $tokens->[$token_i];
+            if ($token->{type} == TOKEN_WORD) {
+                push @$items, {type => ELEMENT_VARIABLE, list => $word_characters};
+            } elsif ($token->{type} == TOKEN_DIGIT) {
+                push @$items, {type => ELEMENT_VARIABLE, list => $digit_characters};
+            } elsif ($token->{type} == TOKEN_CHAR) {
+                push @$items, {type => ELEMENT_FIXED, text => $token->{char}};
+            } elsif ($token->{type} == TOKEN_LIST) {
+                push @$items, {type => ELEMENT_VARIABLE, list => $token->{list}};
+            } elsif ($token->{type} == TOKEN_REPEAT) {
+                die "invalid expression accpted" if @$items == 0;
+                die "invalid expression accpted" if $items->[$#$items]{with_repeat};
+                $items->[$#$items]{with_repeat} = 1;
+                $items->[$#$items]{repeat_n}    = $token->{n};
+                $items->[$#$items]{repeat_m}    = $token->{m} if defined($token->{m});
+            } elsif ($token->{type} == TOKEN_HATENA) {
+                die "invalid expression accpted" if @$items == 0;
+                die "invalid expression accpted" if $items->[$#$items]{with_repeat};
+                $items->[$#$items]{with_repeat} = 1;
+                $items->[$#$items]{repeat_n}    = 0;
+                $items->[$#$items]{repeat_m}    = 1;
+            } elsif ($token->{type} == TOKEN_GROUP_START) {
+                my ($item, $token_end_i) = parse_expression($tokens, 1, $token_i+1);
+                push @$items, $item;
+                $token_i = $token_end_i;
+            } elsif ($token->{type} == TOKEN_GROUP_SEP) {
+                push @$branches, $items;
+                $items = [];
+            } elsif ($token->{type} == TOKEN_GROUP_END) {
+                die "invalid expression accpted" if !defined($nested);
+                push @$branches, $items;
+                return {type => ELEMENT_GROUP, branches => $branches}, $token_i;
+            } else {
+                die "invalid expression accpted";
+            }
+        }
+        push @$branches, $items;
+        return {type => ELEMENT_GROUP, branches => $branches};
+    }
+
+    sub optimize_expression {
+        my ($rule) = @_;
+        for (my $branch_i = 0; $branch_i < @{$rule->{branches}}; $branch_i++) {
+            my $src_items = $rule->{branches}[$branch_i];
+            my $dst_items = [];
+            for (my $src_item_i = 0; $src_item_i < @$src_items; $src_item_i++) {
+                my $src_item = $src_items->[$src_item_i];
+                if ($src_item->{type} == ELEMENT_FIXED && !defined($src_item->{with_repeat})) {
+                    my $text = $src_item->{text};
+                    for (my $next_src_item_i = $src_item_i+1; $next_src_item_i < @$src_items; $next_src_item_i++) {
+                        my $next_src_item = $src_items->[$next_src_item_i];
+                        if ($next_src_item->{type} == ELEMENT_FIXED && !defined($next_src_item->{with_repeat})) {
+                            $text .= $next_src_item->{text};
+                            $src_item_i++;
+                        } else {
+                            last;
+                        }
+                    }
+                    push @$dst_items, {type => ELEMENT_FIXED, text => $text};
+                } elsif ($src_item->{type} == ELEMENT_GROUP) {
+                    push @$dst_items, optimize_expression($src_item);
+                } else {
+                    push @$dst_items, $src_item;
+                }
+            }
+            $rule->{branches}[$branch_i] = $dst_items;
+        }
+        return $rule;
+    }
+
+    sub dump_expression {
+        my ($rule, $depth) = @_;
+        for my $items (@{$rule->{branches}}) {
+            print "    "x($depth//0);
+            print "branch:";
+            print "\n";
+            for my $item (@$items) {
+                if ($item->{type} == ELEMENT_FIXED) {
+                    print "    "x($depth//0);
+                    print "  fixed: \"@{[$item->{text}]}\"";
+                    print ", n=@{[$item->{repeat_n}]}" if defined($item->{repeat_n});
+                    print ", m=@{[$item->{repeat_m}]}" if defined($item->{repeat_m});
+                    print "\n";
+                } elsif ($item->{type} == ELEMENT_VARIABLE) {
+                    print "    "x($depth//0);
+                    print "  variable: \"@{[$item->{list}[0]]}\"..\"@{[$item->{list}[$#{$item->{list}}]]}\"";
+                    print ", n=@{[$item->{repeat_n}]}" if defined($item->{repeat_n});
+                    print ", m=@{[$item->{repeat_m}]}" if defined($item->{repeat_m});
+                    print "\n";
+                } elsif ($item->{type} == ELEMENT_GROUP) {
+                    print "    "x($depth//0);
+                    print "  group:";
+                    print "\ n=@{[$item->{repeat_n}]}" if defined($item->{repeat_n});
+                    print ", m=@{[$item->{repeat_m}]}" if defined($item->{repeat_m});
+                    print "\n";
+                    dump_expression($item, ($depth//0)+1);
+                } else {
+                    die "invalid expression accpted";
+                }
+            }
+        }
+    }
+
+    sub next {
+        my ($self, $group) = @_;
+        if (!$group) {
+            return $self->next($self->{rule});
+        } else {
+            my $texts = [];
+            for my $item (@{$group->{branches}[int(rand(@{$group->{branches}}))]}) {
+                my $count = 1;
+                if ($item->{with_repeat}) {
+                    if (defined($item->{repeat_m})) {
+                        $count = int(rand($item->{repeat_m} - $item->{repeat_n} + 1)) + $item->{repeat_n};
+                    } else {
+                        $count = $item->{repeat_n};
+                    }
+                }
+                for (my $i = 0; $i < $count; $i++) {
+                    push @$texts, $self->next_item($item);
+                }
+            }
+            return join '', @$texts;
+        }
+    }
+
+    sub next_item {
+        my ($self, $item) = @_;
+        if ($item->{type} == ELEMENT_FIXED) {
+            return $item->{text};
+        } elsif ($item->{type} == ELEMENT_VARIABLE) {
+            return $item->{list}[int(rand(@{$item->{list}}))];
+        } elsif ($item->{type} == ELEMENT_GROUP) {
+            return $self->next($item);
+        } else {
+            die "invalid expression accpted";
+        }
+    }
+}
+
+Main::main;

@@ -7,12 +7,8 @@ Generate a random text from the expression.
 $ rant
 8gYmRa3F
 
-$ rant -e '[Vv]im ?[sS]cript' -c 5
-vimScript
-vimscript
-vim Script
-vim script
-vimScript
+$ rant -e'\(/-_-\)/ < [x_]{20}'
+(/-_-)/ < xx__xxxxx_x__xx__xxx
 ```
 
 Usage

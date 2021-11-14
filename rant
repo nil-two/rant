@@ -37,6 +37,9 @@ package Main {
     sub main {
         local $SIG{__WARN__} = \&print_error_and_abort;
 
+        foreach (@ARGV) {
+            $_ = Encode::decode_utf8($_);
+        }
         Getopt::Long::GetOptions(\my %options, qw/
             count|c=i
             expression|e=s
@@ -45,15 +48,15 @@ package Main {
         /);
         if (defined($options{help})) {
             print $cmd_usage;
-            exit 0;
+            return;
         }
         if (!defined($options{expression}) && @ARGV >= 1) {
             $options{expression} = $ARGV[0];
             shift;
         }
-        my $count      = $options{count}                           // 1;
-        my $expression = Encode::decode_utf8($options{expression}) // q/\w{8}/;
-        my $separator  = Encode::decode_utf8($options{separator})  // "\n";
+        my $count      = $options{count}      // 1;
+        my $expression = $options{expression} // q/\w{8}/;
+        my $separator  = $options{separator}  // "\n";
 
         my $generator = Generator->new($expression);
         for (my $i = 0; $i < $count; $i++) {

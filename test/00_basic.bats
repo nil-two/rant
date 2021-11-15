@@ -152,4 +152,10 @@ check() {
   [[ $(cat "$stdout" | perl -nle'print if /^\d\w\t[abc][a-z][a-zA-Z]\\d\\w\\t\\n\[\-\]\{\}\?\(\|\)A{3}B{5,10}C?(aaa|bbb|ccc)(aaa|(bbb|(ccc|ddd)))(aaa|bbb|ccc){3,5}$/') != "" ]]
 }
 
+@test 'rant-expression: multibyte experession works' {
+  check "$rant" '(あさ|ひる|よる) [あかさたな]\いう{3}え?'
+  [[ $(cat "$exitcode") == 0 ]]
+  [[ $(cat "$stdout" | perl -Mutf8 -CS -nle'print if /^(あさ|ひる|よる) [あかさたな]いう{3}え{0,1}$/') != "" ]]
+}
+
 # vim: ft=bash

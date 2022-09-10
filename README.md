@@ -1,7 +1,7 @@
 rant
 ====
 
-![CI](https://github.com/nil2nekoni/rant/workflows/CI/badge.svg)
+![CI](https://github.com/nil-two/rant/workflows/CI/badge.svg)
 
 Generate a random text from the expression.
 
@@ -52,7 +52,7 @@ Installation
 ### Example
 
 ```
-$ curl -L https://raw.githubusercontent.com/nil2nekoni2/rant/master/rant > ~/bin/rant
+$ curl -L https://raw.githubusercontent.com/nil-two/rant/master/rant > ~/bin/rant
 $ chmod +x ~/bin/rant
 ```
 

@@ -21,10 +21,10 @@ $ rant [<option(s)>] <expression-only-if-no-other-expression>
 generate a random text from the expression
 
 options:
-  -c, --count=N           generate random text N times
-  -e, --expression=EXPR   generate random text from EXPR
-  -s, --separator=SEP     print SEP between the generated text
-      --help              print usage and exit
+  -c, --count=N          generate random text N times
+  -e, --expression=EXPR  generate random text from EXPR
+  -s, --separator=SEP    print SEP between the generated text
+      --help             print usage and exit
 
 expression-syntax:
   \d    digit character
